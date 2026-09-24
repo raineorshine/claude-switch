@@ -2,7 +2,7 @@
 
 Swap between Claude accounts (Code + Desktop) on macOS with a single command.
 
-Claude Code credentials saved by csw live in macOS Keychain. Profile switching also moves and links Claude's existing configuration and Desktop data directories on disk. Optional local skill sharing stores the source profile name in the target profile directory.
+Claude Code credentials saved by csw live in macOS Keychain. Profile switching also moves and links Claude's existing configuration and Desktop data directories on disk. Optional sharing keeps local skills and user-installed plugins available in another profile while account data stays separate.
 
 ## Install
 
@@ -114,40 +114,37 @@ skills in `~/.claude/skills/` and installed plugins therefore do not appear in
 the new profile automatically. The account's conversations and credentials stay
 separate too.
 
-To keep **local user skills** from `work` available in `personal`, opt in after
+To keep **local user skills and installed plugins** from `work` available in `personal`, opt in after
 creating both profiles:
 
 ```bash
-csw share-skills work personal
+csw share work personal
 ```
 
 The command links local skills that are missing in `personal`. It preserves
 same-named skills already there and never links Claude's account-specific
 `skills/synced` directory. Edits to linked skills appear in both profiles;
 new skills added to `work` are linked automatically the next time you run
-`csw use personal`. Skills created only in `personal` stay there. Run
-`csw unshare-skills personal` to stop refreshing and remove links pointing
-to `work`. The source profile cannot be deleted while another profile shares
-its skills.
+`csw use personal`. Skills created only in `personal` stay there.
 
-**Plugins still need to be installed in each profile.** While `personal` is
-active, for example, install Compound Engineering with:
+The same sharing relationship copies **user-installed plugins** through Claude's
+plugin commands. It adds missing marketplaces and plugins, matches enabled
+states, and updates a target plugin when its version differs from the source.
+It runs when sharing is enabled and before each switch to `personal`, so newly
+installed plugins in `work` arrive on the next switch. Claude keeps each
+profile's plugin cache, plugin data, and account-synced plugins separate.
+Target-only plugins are preserved. A failed plugin install stops the switch
+before Claude Desktop is closed; retry when the marketplace is available.
+Plugins whose marketplace requires running an install command may still ask
+for explicit confirmation, which csw does not bypass.
 
-```bash
-claude plugin marketplace add EveryInc/compound-engineering-plugin
-claude plugin install compound-engineering@compound-engineering-plugin
-claude plugin list
-```
+Run `csw unshare personal` to stop future syncing and remove skill links;
+already installed plugins remain. The source profile cannot be deleted while
+another profile shares from it. `share-skills` and `unshare-skills` remain
+aliases for existing setups.
 
-Before declaring the profiles matched, compare the complete installed plugin
-lists, including enabled status and versions. A plugin named in a missing
-command report may be only one of several missing plugins. Repeat the comparison
-after installation; the target should have no missing plugin IDs. Plugins shown
-as available in an account's catalog are not necessarily installed.
-
-Start a new Claude Code session to load the plugin. Plugin versions and updates
-remain independent between profiles. Skills uploaded in Claude's **Customize →
-Skills** are [tied to the signed-in Claude account](https://support.claude.com/en/articles/12512180-use-skills-in-claude);
+Start a new Claude Code session to load newly installed plugins. Skills uploaded
+in Claude's **Customize → Skills** are [tied to the signed-in Claude account](https://support.claude.com/en/articles/12512180-use-skills-in-claude);
 these local links do not copy those uploads to another account.
 
 ## Usage
@@ -156,8 +153,8 @@ these local links do not copy those uploads to another account.
 csw save <name>    Save current sessions (Code + Desktop) as a named profile
 csw use <name>     Switch to a saved profile
 csw new <name>     Create a new empty profile slot (then: claude auth login)
-csw share-skills <source> <target>  Share local skills and refresh on switch
-csw unshare-skills <target>         Stop sharing and remove shared links
+csw share <source> <target>  Share local skills and user plugins on each switch
+csw unshare <target>        Stop sharing and remove shared skill links
 csw delete <name>  Delete a profile and its data
 csw list           List all saved profiles
 csw whoami         Show active session info (Code + Desktop + saved profiles)
@@ -170,7 +167,7 @@ csw logout-all     Log out of all accounts and remove active symlinks
 
 ### Security model
 
-csw saves Claude Code session credentials in **macOS Keychain** and moves Claude's local configuration and Desktop data into profile-specific paths. When skill sharing is enabled, the target profile also contains a `.csw-skills-source` file naming the source profile.
+csw saves Claude Code session credentials in **macOS Keychain** and moves Claude's local configuration and Desktop data into profile-specific paths. When sharing is enabled, the target profile also contains a `.csw-skills-source` file naming the source profile; that relationship governs both local skills and user plugins.
 
 | Data | Where it lives |
 |---|---|

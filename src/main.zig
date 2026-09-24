@@ -16,6 +16,7 @@ comptime {
     _ = @import("paths.zig");
     _ = @import("profile.zig");
     _ = @import("skills.zig");
+    _ = @import("plugins.zig");
 }
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
@@ -198,14 +199,14 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         return profile.cmdUse(gpa, io, try needsName(args, "switch"));
     } else if (std.mem.eql(u8, cmd, "new")) {
         return profile.cmdNew(gpa, io, try needsName(args, "new"));
-    } else if (std.mem.eql(u8, cmd, "share-skills")) {
+    } else if (std.mem.eql(u8, cmd, "share") or std.mem.eql(u8, cmd, "share-skills")) {
         if (args.len < 3) {
-            display.print("❌  Usage: csw share-skills <source> <target>\n", .{});
+            display.print("❌  Usage: csw share <source> <target>\n", .{});
             return error.MissingArg;
         }
-        return profile.cmdShareSkills(gpa, args[1], args[2]);
-    } else if (std.mem.eql(u8, cmd, "unshare-skills")) {
-        return profile.cmdUnshareSkills(gpa, try needsName(args, "unshare-skills"));
+        return profile.cmdShare(gpa, io, args[1], args[2]);
+    } else if (std.mem.eql(u8, cmd, "unshare") or std.mem.eql(u8, cmd, "unshare-skills")) {
+        return profile.cmdUnshare(gpa, try needsName(args, "unshare"));
     } else if (std.mem.eql(u8, cmd, "delete")) {
         const name_opt: ?[]const u8 = if (args.len >= 2) args[1] else null;
         return profile.cmdDelete(gpa, io, name_opt);
@@ -244,8 +245,8 @@ fn printHelp() void {
         \\  save <name>      Save current sessions as a named profile
         \\  use <name>       Switch to a saved profile
         \\  new <name>       Create a new empty profile slot
-        \\  share-skills <source> <target>  Share local skills, refresh on each switch
-        \\  unshare-skills <target>         Stop sharing and remove shared links
+        \\  share <source> <target>  Share local skills and plugins on each switch
+        \\  unshare <target>        Stop sharing and remove shared skill links
         \\  delete [name]    Delete a profile
         \\  list             List all saved profiles
         \\  whoami           Show active session info
