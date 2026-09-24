@@ -107,6 +107,47 @@ csw use personal
 csw pick
 ```
 
+### Skills and plugins in a new profile
+
+`csw new` creates an empty `~/.claude.<profile>/` directory. Claude Code user
+skills in `~/.claude/skills/` and installed plugins therefore do not appear in
+the new profile automatically. The account's conversations and credentials stay
+separate too.
+
+To share **local user skills**, link each skill from the existing profile into
+the new one. Leave the `synced` subdirectory alone: Claude uses it for skills
+synced from the signed-in account. For the `work` and `personal` example above,
+run this after creating `personal`:
+
+```bash
+mkdir -p "$HOME/.claude.personal/skills"
+for skill in "$HOME/.claude.work/skills/"*; do
+  [ -e "$skill" ] || continue
+  [ "$(basename "$skill")" = synced ] && continue
+  target="$HOME/.claude.personal/skills/$(basename "$skill")"
+  [ -e "$target" ] || [ -L "$target" ] || ln -s "$skill" "$target"
+done
+```
+
+This preserves existing skills in `personal`; reconcile any matching names
+before sharing them. Edits to linked skills appear in both profiles. Rerun the
+loop when you add a new skill to `work`. Keep the `work` profile directory: the
+links depend on it.
+
+**Plugins still need to be installed in each profile.** While `personal` is
+active, for example, install Compound Engineering with:
+
+```bash
+claude plugin marketplace add EveryInc/compound-engineering-plugin
+claude plugin install compound-engineering@compound-engineering-plugin
+claude plugin list
+```
+
+Start a new Claude Code session to load the plugin. Plugin versions and updates
+remain independent between profiles. Skills uploaded in Claude's **Customize →
+Skills** are [tied to the signed-in Claude account](https://support.claude.com/en/articles/12512180-use-skills-in-claude);
+these local links do not copy those uploads to another account.
+
 ## Usage
 
 ```
