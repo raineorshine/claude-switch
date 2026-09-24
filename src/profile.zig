@@ -173,6 +173,7 @@ pub fn cmdShareSkills(gpa: std.mem.Allocator, source: []const u8, target: []cons
     defer gpa.free(h);
     const count = try skills.shareIn(gpa, h, source, target);
     display.print("Sharing local skills from '{s}' to '{s}' ({d} new links). Future additions refresh when you switch to '{s}'.\n", .{ source, target, count, target });
+    display.info("Installed plugins are separate for each profile. Compare plugin lists and install any missing plugins in the target profile.\n");
 }
 
 pub fn cmdUnshareSkills(gpa: std.mem.Allocator, target: []const u8) !void {

@@ -139,6 +139,12 @@ claude plugin install compound-engineering@compound-engineering-plugin
 claude plugin list
 ```
 
+Before declaring the profiles matched, compare the complete installed plugin
+lists, including enabled status and versions. A plugin named in a missing
+command report may be only one of several missing plugins. Repeat the comparison
+after installation; the target should have no missing plugin IDs. Plugins shown
+as available in an account's catalog are not necessarily installed.
+
 Start a new Claude Code session to load the plugin. Plugin versions and updates
 remain independent between profiles. Skills uploaded in Claude's **Customize →
 Skills** are [tied to the signed-in Claude account](https://support.claude.com/en/articles/12512180-use-skills-in-claude);
