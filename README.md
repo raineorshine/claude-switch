@@ -2,7 +2,7 @@
 
 Swap between Claude accounts (Code + Desktop) on macOS with a single command.
 
-**Fully offline. Zero storage.** No tokens are sent anywhere and nothing is written to disk by csw. All credentials live exclusively in macOS Keychain — the same encrypted, hardware-backed store that Claude itself uses. No config files, no dotfiles, no plaintext secrets.
+Claude Code credentials saved by csw live in macOS Keychain. Profile switching also moves and links Claude's existing configuration and Desktop data directories on disk. Optional local skill sharing stores the source profile name in the target profile directory.
 
 ## Install
 
@@ -114,25 +114,21 @@ skills in `~/.claude/skills/` and installed plugins therefore do not appear in
 the new profile automatically. The account's conversations and credentials stay
 separate too.
 
-To share **local user skills**, link each skill from the existing profile into
-the new one. Leave the `synced` subdirectory alone: Claude uses it for skills
-synced from the signed-in account. For the `work` and `personal` example above,
-run this after creating `personal`:
+To keep **local user skills** from `work` available in `personal`, opt in after
+creating both profiles:
 
 ```bash
-mkdir -p "$HOME/.claude.personal/skills"
-for skill in "$HOME/.claude.work/skills/"*; do
-  [ -e "$skill" ] || continue
-  [ "$(basename "$skill")" = synced ] && continue
-  target="$HOME/.claude.personal/skills/$(basename "$skill")"
-  [ -e "$target" ] || [ -L "$target" ] || ln -s "$skill" "$target"
-done
+csw share-skills work personal
 ```
 
-This preserves existing skills in `personal`; reconcile any matching names
-before sharing them. Edits to linked skills appear in both profiles. Rerun the
-loop when you add a new skill to `work`. Keep the `work` profile directory: the
-links depend on it.
+The command links local skills that are missing in `personal`. It preserves
+same-named skills already there and never links Claude's account-specific
+`skills/synced` directory. Edits to linked skills appear in both profiles;
+new skills added to `work` are linked automatically the next time you run
+`csw use personal`. Skills created only in `personal` stay there. Run
+`csw unshare-skills personal` to stop refreshing and remove links pointing
+to `work`. The source profile cannot be deleted while another profile shares
+its skills.
 
 **Plugins still need to be installed in each profile.** While `personal` is
 active, for example, install Compound Engineering with:
@@ -154,6 +150,8 @@ these local links do not copy those uploads to another account.
 csw save <name>    Save current sessions (Code + Desktop) as a named profile
 csw use <name>     Switch to a saved profile
 csw new <name>     Create a new empty profile slot (then: claude auth login)
+csw share-skills <source> <target>  Share local skills and refresh on switch
+csw unshare-skills <target>         Stop sharing and remove shared links
 csw delete <name>  Delete a profile and its data
 csw list           List all saved profiles
 csw whoami         Show active session info (Code + Desktop + saved profiles)
@@ -166,7 +164,7 @@ csw logout-all     Log out of all accounts and remove active symlinks
 
 ### Security model
 
-csw does not create any files or directories of its own. All session tokens are stored in **macOS Keychain**, protected by the same OS-level encryption and access controls that guard your passwords, SSH keys, and certificates.
+csw saves Claude Code session credentials in **macOS Keychain** and moves Claude's local configuration and Desktop data into profile-specific paths. When skill sharing is enabled, the target profile also contains a `.csw-skills-source` file naming the source profile.
 
 | Data | Where it lives |
 |---|---|
@@ -177,8 +175,7 @@ csw does not create any files or directories of its own. All session tokens are 
 | Profile configs | `~/.claude.<profile>.json` + `~/.claude.<profile>/` |
 | Active profile | `~/.claude.json` → symlink, `~/.claude/` → symlink |
 
-- No network requests are ever made.
-- No plaintext tokens ever touch the filesystem.
+- Account switching does not send tokens to a csw service.
 - Both Claude Code and Claude Desktop are optional — csw works with either or both.
 - On switch, Claude Desktop is quit automatically and relaunched.
 
