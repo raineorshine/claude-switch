@@ -6,6 +6,7 @@ const keychain = @import("keychain.zig");
 const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
 const profile = @import("profile.zig");
+const usage = @import("usage.zig");
 
 // Re-exporta os módulos para que `zig build test` colete todos os test blocks.
 comptime {
@@ -17,6 +18,10 @@ comptime {
     _ = @import("profile.zig");
     _ = @import("skills.zig");
     _ = @import("plugins.zig");
+    _ = @import("exec.zig");
+    _ = @import("http.zig");
+    _ = @import("oauth.zig");
+    _ = @import("usage.zig");
 }
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
@@ -221,6 +226,10 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "update")) {
         const verbose = args.len >= 2 and std.mem.eql(u8, args[1], "--verbose");
         return cmdUpdate(gpa, io, verbose);
+    } else if (std.mem.eql(u8, cmd, "usage")) {
+        return usage.cmdUsage(gpa, io);
+    } else if (std.mem.eql(u8, cmd, "next")) {
+        return usage.cmdNext(gpa, io);
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
         return profile.cmdLogoutAll(gpa, io);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
@@ -250,6 +259,8 @@ fn printHelp() void {
         \\  delete [name]    Delete a profile
         \\  list             List all saved profiles
         \\  whoami           Show active session info
+        \\  usage            Show 5-hour and weekly usage for every profile
+        \\  next             Show which profile a switch would move to, and why
         \\  pick             Interactive profile picker (sk / fzf)
         \\  update [--verbose]  Update csw to the latest release
         \\  logout-all       Log out and remove all active symlinks

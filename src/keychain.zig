@@ -68,6 +68,23 @@ pub fn set(gpa: std.mem.Allocator, io: std.Io, service: []const u8, account: []c
     }
 }
 
+/// Replaces the value in place (`-U`), so a failed write never leaves the
+/// entry deleted. Use this for rotated logins, where the old value is dead.
+pub fn update(gpa: std.mem.Allocator, io: std.Io, service: []const u8, account: []const u8, value: []const u8) !void {
+    const result = try std.process.run(gpa, io, .{
+        .argv = &.{ "security", "add-generic-password", "-U", "-s", service, "-a", account, "-w", value },
+        .stdout_limit = .limited(1024),
+        .stderr_limit = .limited(1024),
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    const success = switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!success) return error.KeychainWriteFailed;
+}
+
 pub fn delete(gpa: std.mem.Allocator, io: std.Io, service: []const u8) !void {
     const result = try std.process.run(gpa, io, .{
         .argv = &.{ "security", "delete-generic-password", "-s", service },
@@ -123,6 +140,26 @@ test "set sobrescreve entrada existente" {
     const val = try get(alloc, io, svc);
     defer alloc.free(val);
     try std.testing.expectEqualStrings("second", val);
+}
+
+test "update replaces an existing entry in place" {
+    const alloc = std.testing.allocator;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-upd", .{@as(i64, c_time.time(null))});
+    defer alloc.free(svc);
+    delete(alloc, io, svc) catch {};
+    defer delete(alloc, io, svc) catch {};
+
+    try set(alloc, io, svc, "user", "first");
+    try update(alloc, io, svc, "user", "second");
+    const val = try get(alloc, io, svc);
+    defer alloc.free(val);
+    try std.testing.expectEqualStrings("second", val);
+    const acct = getAccount(alloc, io, svc);
+    defer alloc.free(acct);
+    try std.testing.expectEqualStrings("user", acct);
 }
 
 test "delete de entrada inexistente não falha" {
