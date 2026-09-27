@@ -8,6 +8,7 @@ const paths = @import("paths.zig");
 const profile = @import("profile.zig");
 const usage = @import("usage.zig");
 const handoff = @import("handoff.zig");
+const schedule = @import("schedule.zig");
 
 // Re-exporta os módulos para que `zig build test` colete todos os test blocks.
 comptime {
@@ -26,6 +27,7 @@ comptime {
     _ = @import("sessions.zig");
     _ = @import("cloud.zig");
     _ = @import("handoff.zig");
+    _ = @import("schedule.zig");
 }
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
@@ -257,6 +259,8 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
             }
         }
         return handoff.cmdHandoff(gpa, io, opts);
+    } else if (std.mem.eql(u8, cmd, "schedule")) {
+        return schedule.cmdSchedule(gpa, io, if (args.len >= 2) args[1] else null);
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
         return profile.cmdLogoutAll(gpa, io);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
@@ -290,6 +294,7 @@ fn printHelp() void {
         \\  next             Show which profile a switch would move to, and why
         \\  handoff [--dry-run] [--force]  At 90%+ weekly usage: hand off cloud sessions, carry
         \\                   local sessions, switch to the next profile, and notify
+        \\  schedule [install|uninstall|status]  Run csw handoff every night at 22:00 (launchd)
         \\  pick             Interactive profile picker (sk / fzf)
         \\  update [--verbose]  Update csw to the latest release
         \\  logout-all       Log out and remove all active symlinks
