@@ -49,6 +49,7 @@ pub const Outcome = enum {
     dry_run,
     window_closed,
     switched,
+    switch_failed,
 };
 
 const Report = struct {
@@ -76,7 +77,15 @@ fn notifyUnlessDry(fx: Effects, gpa: std.mem.Allocator, io: std.Io, opts: Option
 pub fn run(gpa: std.mem.Allocator, io: std.Io, fx: Effects, opts: Options, out_dir: []const u8) !Outcome {
     var report: Report = .{ .gpa = gpa };
     defer report.deinit();
-    const outcome = try runInner(gpa, io, fx, opts, out_dir, &report);
+    const outcome = runInner(gpa, io, fx, opts, out_dir, &report) catch |err| {
+        report.line("The handoff stopped on an error: {s}. Nothing after that point ran.", .{@errorName(err)});
+        if (!@import("builtin").is_test) display.print("{s}", .{report.buf.items});
+        if (!opts.dry_run) {
+            fx.writeReport(fx.ctx, gpa, io, out_dir, report.buf.items);
+            fx.notify(fx.ctx, gpa, io, "csw: handoff failed", @errorName(err));
+        }
+        return err;
+    };
     // The test runner owns stdout, so the report is only printed outside tests.
     if (!@import("builtin").is_test) display.print("{s}", .{report.buf.items});
     if (!opts.dry_run and outcome != .below_threshold) fx.writeReport(fx.ctx, gpa, io, out_dir, report.buf.items);
@@ -117,13 +126,13 @@ fn runInner(gpa: std.mem.Allocator, io: std.Io, fx: Effects, opts: Options, out_
 
     var choice = try usage.chooseNext(gpa, rows);
     defer choice.deinit(gpa);
-    for (choice.excluded.items) |e| report.line("- Not {s}: {s}", .{ e.name, e.reason });
+    for (choice.excluded.items) |e| report.line("- Not {s}: {s}", .{ e.name, e.reason() });
     const next_i: ?usize = choice.next;
     if (next_i == null and opts.dry_run) report.line("No profile has capacity, so a real run would not switch.", .{});
     if (next_i == null and !opts.dry_run) {
         report.line("No profile has capacity, so nothing was switched.", .{});
         var sign_in: ?[]const u8 = null;
-        for (choice.excluded.items) |e| if (std.mem.eql(u8, e.reason, "needs signing in again")) {
+        for (choice.excluded.items) |e| if (e.kind == .needs_sign_in) {
             sign_in = e.name;
         };
         const msg = if (sign_in) |n|
@@ -169,10 +178,18 @@ fn runInner(gpa: std.mem.Allocator, io: std.Io, fx: Effects, opts: Options, out_
     if (opts.scheduled and !inNightWindow(fx.localHour(fx.ctx, fx.nowS(fx.ctx)))) {
         report.line("The night window closed before the switch, so nothing was switched. Handoffs are saved in {s}.", .{out_dir});
         notifyUnlessDry(fx, gpa, io, opts, "csw: handoff not finished", "Handoffs ran past 06:00, so the account was not switched.");
+        for (pending.items) |p| exec.removeTree(gpa, io, p.handoff.work_dir);
         return .window_closed;
     }
 
-    var use_result = try fx.switchTo(fx.ctx, gpa, io, next_name);
+    var use_result = fx.switchTo(fx.ctx, gpa, io, next_name) catch |err| {
+        report.line("The switch to {s} failed ({s}), so the account was not switched. Handoffs are saved in {s}.", .{ next_name, @errorName(err), out_dir });
+        for (pending.items) |p| exec.removeTree(gpa, io, p.handoff.work_dir);
+        const msg = try std.fmt.allocPrint(gpa, "The switch to {s} failed ({s}). Still on {s}.", .{ next_name, @errorName(err), active_name.? });
+        defer gpa.free(msg);
+        notifyUnlessDry(fx, gpa, io, opts, "csw: switch failed", msg);
+        return .switch_failed;
+    };
     defer use_result.deinit(gpa);
     var carried: usize = 0;
     if (use_result.carry) |c| {
@@ -329,6 +346,7 @@ const Fake = struct {
     hour_seq: []const u8 = &.{ 22, 22, 22 },
     hour_i: usize = 0,
     fail_handoff: ?[]const u8 = null,
+    fail_switch: bool = false,
     calls: std.ArrayList([]const u8) = .empty,
     notes: std.ArrayList([]u8) = .empty,
 
@@ -371,7 +389,9 @@ const Fake = struct {
     }
 
     fn switchTo(ctx: *anyopaque, _: std.mem.Allocator, _: std.Io, _: []const u8) anyerror!profile.UseResult {
-        self(ctx).log("switch");
+        const f = self(ctx);
+        f.log("switch");
+        if (f.fail_switch) return error.KeychainWriteFailed;
         return .{ .carry = .{ .carried = 3 } };
     }
 
@@ -447,6 +467,14 @@ test "a failed handoff does not stop the switch (R16)" {
     try std.testing.expectEqual(Outcome.switched, try run(std.testing.allocator, std.testing.io, f.effects(), .{}, "/out"));
     try f.expectCalls(&.{ "usage", "list-cloud", "handoff", "switch", "notify", "report" });
     try std.testing.expect(std.mem.indexOf(u8, f.notes.items[0], "1 problem(s)") != null);
+}
+
+test "a failed switch still reports and notifies" {
+    var f: Fake = .{ .gpa = std.testing.allocator, .fail_switch = true };
+    defer f.deinit();
+    try std.testing.expectEqual(Outcome.switch_failed, try run(std.testing.allocator, std.testing.io, f.effects(), .{}, "/out"));
+    try f.expectCalls(&.{ "usage", "list-cloud", "handoff", "switch", "notify", "report" });
+    try std.testing.expect(std.mem.indexOf(u8, f.notes.items[0], "Still on primary") != null);
 }
 
 test "next profile needs sign-in: no switch, notification names it (R17)" {

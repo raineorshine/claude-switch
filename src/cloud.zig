@@ -9,6 +9,8 @@
 const std = @import("std");
 const exec = @import("exec.zig");
 const http = @import("http.zig");
+const json = @import("json.zig");
+const usage = @import("usage.zig");
 
 pub const SESSIONS_URL = "https://api.anthropic.com/v1/sessions";
 pub const HANDOFF_FILE = "HANDOFF.md";
@@ -21,6 +23,10 @@ pub const CLONE_TIMEOUT_S: i64 = 5 * 60;
 
 /// Tools the unattended teleport may use: read the repo, run the skill, write one file.
 pub const TELEPORT_ALLOWED_TOOLS = "Read,Glob,Grep,Skill,Write(" ++ HANDOFF_FILE ++ ")";
+
+/// Every unattended claude run in a cloned repo loads only the user's own
+/// settings, never the clone's project settings, hooks, or MCP servers.
+pub const ISOLATION_FLAGS = [_][]const u8{ "--setting-sources", "user", "--strict-mcp-config" };
 
 pub const Session = struct {
     id: []const u8,
@@ -38,12 +44,6 @@ pub const Page = struct {
     last_id: ?[]const u8,
 };
 
-fn str(v: std.json.Value, key: []const u8) ?[]const u8 {
-    if (v != .object) return null;
-    const f = v.object.get(key) orelse return null;
-    return if (f == .string) f.string else null;
-}
-
 /// Parses one page of `/v1/sessions`. All memory comes from `arena`.
 pub fn parsePage(arena: std.mem.Allocator, body: []const u8) !Page {
     const root = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch return error.MalformedSessionList;
@@ -53,15 +53,15 @@ pub fn parsePage(arena: std.mem.Allocator, body: []const u8) !Page {
 
     var out: std.ArrayList(Session) = .empty;
     for (data.array.items) |s| {
-        const id = str(s, "id") orelse continue;
-        const created = str(s, "created_at") orelse continue;
+        const id = json.stringField(s, "id") orelse continue;
+        const created = json.stringField(s, "created_at") orelse continue;
         var repo: ?[]const u8 = null;
         if (s.object.get("session_context")) |ctx| {
             if (ctx == .object) if (ctx.object.get("sources")) |sources| {
                 if (sources == .array) for (sources.array.items) |src| {
-                    const kind = str(src, "type") orelse continue;
+                    const kind = json.stringField(src, "type") orelse continue;
                     if (std.mem.eql(u8, kind, "git_repository")) {
-                        repo = str(src, "url");
+                        repo = json.stringField(src, "url");
                         break;
                     }
                 };
@@ -81,16 +81,16 @@ pub fn parsePage(arena: std.mem.Allocator, body: []const u8) !Page {
         }
         try out.append(arena, .{
             .id = id,
-            .title = str(s, "title") orelse "",
-            .status = str(s, "session_status") orelse "",
-            .env_kind = str(s, "environment_kind") orelse "",
-            .created_at = @import("usage.zig").parseIso8601(created) catch continue,
+            .title = json.stringField(s, "title") orelse "",
+            .status = json.stringField(s, "session_status") orelse "",
+            .env_kind = json.stringField(s, "environment_kind") orelse "",
+            .created_at = usage.parseIso8601(created) catch continue,
             .repo_url = repo,
             .branch = branch,
         });
     }
     const has_more = if (root.object.get("has_more")) |h| h == .bool and h.bool else false;
-    return .{ .sessions = try out.toOwnedSlice(arena), .has_more = has_more, .last_id = str(root, "last_id") };
+    return .{ .sessions = try out.toOwnedSlice(arena), .has_more = has_more, .last_id = json.stringField(root, "last_id") };
 }
 
 /// R8: cloud sessions that are running, or open and started in the last 24 hours.
@@ -136,8 +136,8 @@ pub fn handoffPrompt(gpa: std.mem.Allocator) ![]u8 {
 
 /// argv for the unattended teleport. Never carries a bypass permission flag.
 pub fn teleportArgv(gpa: std.mem.Allocator, claude: []const u8, session_id: []const u8, prompt: []const u8) ![]const []const u8 {
-    const argv = try gpa.alloc([]const u8, 9);
-    argv[0..9].* = .{ claude, "-p", "--teleport", session_id, "--allowedTools", TELEPORT_ALLOWED_TOOLS, "--output-format", "json", prompt };
+    const argv = try gpa.alloc([]const u8, 12);
+    argv[0..12].* = .{ claude, ISOLATION_FLAGS[0], ISOLATION_FLAGS[1], ISOLATION_FLAGS[2], "-p", "--teleport", session_id, "--allowedTools", TELEPORT_ALLOWED_TOOLS, "--output-format", "json", prompt };
     return argv;
 }
 
@@ -176,11 +176,6 @@ pub const Handoff = struct {
 
 pub const Failure = struct { reason: []const u8 };
 
-fn removeTree(gpa: std.mem.Allocator, io: std.Io, path: []const u8) void {
-    const r = exec.run(gpa, io, .{ .argv = &.{ "/bin/rm", "-rf", path } }) catch return;
-    r.deinit(gpa);
-}
-
 /// Downloads `s` into a throwaway clone and writes its handoff there, then saves
 /// a copy under `out_dir`. On failure the temp dir is removed and a reason returned.
 pub fn handOff(gpa: std.mem.Allocator, io: std.Io, claude: []const u8, s: Session, tmp_root: []const u8, out_dir: []const u8) HandOffResult {
@@ -189,28 +184,32 @@ pub fn handOff(gpa: std.mem.Allocator, io: std.Io, claude: []const u8, s: Sessio
 
 pub const HandOffResult = union(enum) { ok: Handoff, failed: []const u8 };
 
+/// Shallow-clones `url` into `dest`, on `branch` when given. True on success.
+fn cloneRepo(gpa: std.mem.Allocator, io: std.Io, url: []const u8, branch: ?[]const u8, dest: []const u8) bool {
+    const argv: []const []const u8 = if (branch) |b|
+        &.{ "git", "clone", "--quiet", "--depth", "1", "--branch", b, url, dest }
+    else
+        &.{ "git", "clone", "--quiet", "--depth", "1", url, dest };
+    const r = exec.run(gpa, io, .{ .argv = argv, .timeout_s = CLONE_TIMEOUT_S }) catch return false;
+    defer r.deinit(gpa);
+    return r.ok();
+}
+
 fn handOffWithTimeout(gpa: std.mem.Allocator, io: std.Io, claude: []const u8, s: Session, tmp_root: []const u8, out_dir: []const u8, timeout_s: i64) HandOffResult {
     const work = std.fmt.allocPrint(gpa, "{s}/{s}", .{ tmp_root, s.id }) catch return .{ .failed = "out of memory" };
     var keep = false;
     defer if (!keep) {
-        removeTree(gpa, io, work);
+        exec.removeTree(gpa, io, work);
         gpa.free(work);
     };
-    removeTree(gpa, io, work);
+    exec.removeTree(gpa, io, work);
 
     if (s.repo_url) |url| {
-        var cloned = false;
-        if (s.branch) |b| {
-            if (exec.run(gpa, io, .{ .argv = &.{ "git", "clone", "--quiet", "--depth", "1", "--branch", b, url, work }, .timeout_s = CLONE_TIMEOUT_S })) |r| {
-                defer r.deinit(gpa);
-                cloned = r.ok();
-            } else |_| {}
-        }
-        if (!cloned) {
-            removeTree(gpa, io, work);
-            const r = exec.run(gpa, io, .{ .argv = &.{ "git", "clone", "--quiet", "--depth", "1", url, work }, .timeout_s = CLONE_TIMEOUT_S }) catch return .{ .failed = "repository could not be cloned" };
-            defer r.deinit(gpa);
-            if (!r.ok()) return .{ .failed = "repository could not be cloned" };
+        // The session's branch when it still exists, else the default branch.
+        const on_branch = if (s.branch) |b| cloneRepo(gpa, io, url, b, work) else false;
+        if (!on_branch) {
+            exec.removeTree(gpa, io, work);
+            if (!cloneRepo(gpa, io, url, null, work)) return .{ .failed = "repository could not be cloned" };
         }
     } else {
         std.Io.Dir.cwd().createDirPath(io, work) catch return .{ .failed = "temporary directory could not be created" };
@@ -247,14 +246,14 @@ fn handOffWithTimeout(gpa: std.mem.Allocator, io: std.Io, claude: []const u8, s:
 pub const ContinueResult = union(enum) { ok: []u8, failed: []const u8 };
 
 pub fn continueFrom(gpa: std.mem.Allocator, io: std.Io, claude: []const u8, title: []const u8, h: Handoff) ContinueResult {
-    defer removeTree(gpa, io, h.work_dir);
+    defer exec.removeTree(gpa, io, h.work_dir);
     const text = std.Io.Dir.cwd().readFileAlloc(io, h.saved_path, gpa, .limited(4 * 1024 * 1024)) catch return .{ .failed = "handoff file is missing" };
     defer gpa.free(text);
 
     const new_title = std.fmt.allocPrint(gpa, "{s} (continued)", .{title}) catch return .{ .failed = "out of memory" };
     defer gpa.free(new_title);
     const created = exec.run(gpa, io, .{
-        .argv = &.{ "/usr/bin/script", "-q", "/dev/null", claude, "--cloud", new_title },
+        .argv = &.{ "/usr/bin/script", "-q", "/dev/null", claude, ISOLATION_FLAGS[0], ISOLATION_FLAGS[1], ISOLATION_FLAGS[2], "--cloud", new_title },
         .cwd = h.work_dir,
         .timeout_s = CREATE_TIMEOUT_S,
     }) catch return .{ .failed = "claude could not be started" };
@@ -268,7 +267,7 @@ pub fn continueFrom(gpa: std.mem.Allocator, io: std.Io, claude: []const u8, titl
     };
     defer gpa.free(msg);
     const sent = exec.run(gpa, io, .{
-        .argv = &.{ claude, "-p", msg, "--cloud", id_owned },
+        .argv = &.{ claude, ISOLATION_FLAGS[0], ISOLATION_FLAGS[1], ISOLATION_FLAGS[2], "-p", msg, "--cloud", id_owned },
         .cwd = h.work_dir,
         .timeout_s = SEND_TIMEOUT_S,
     }) catch {
@@ -279,6 +278,10 @@ pub fn continueFrom(gpa: std.mem.Allocator, io: std.Io, claude: []const u8, titl
     if (sent.timed_out) {
         gpa.free(id_owned);
         return .{ .failed = "timed out" };
+    }
+    if (!sent.ok()) {
+        gpa.free(id_owned);
+        return .{ .failed = "handoff could not be sent" };
     }
     return .{ .ok = id_owned };
 }
@@ -313,7 +316,7 @@ test "shouldHandOff keeps running and recent cloud sessions only (AE3)" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const page = try parsePage(arena.allocator(), PAGE);
-    const now = try @import("usage.zig").parseIso8601("2026-09-27T22:00:00Z");
+    const now = try usage.parseIso8601("2026-09-27T22:00:00Z");
     var picked: std.ArrayList([]const u8) = .empty;
     defer picked.deinit(std.testing.allocator);
     for (page.sessions) |s| if (shouldHandOff(s, now)) try picked.append(std.testing.allocator, s.id);
@@ -332,10 +335,13 @@ test "teleportArgv scopes tools and never bypasses permissions" {
     const gpa = std.testing.allocator;
     const argv = try teleportArgv(gpa, "claude", "session_1", "do it");
     defer gpa.free(argv);
-    try std.testing.expectEqualStrings("--teleport", argv[2]);
-    try std.testing.expectEqualStrings("session_1", argv[3]);
-    try std.testing.expectEqualStrings(TELEPORT_ALLOWED_TOOLS, argv[5]);
-    try std.testing.expectEqualStrings("do it", argv[8]);
+    try std.testing.expectEqualStrings("--setting-sources", argv[1]);
+    try std.testing.expectEqualStrings("user", argv[2]);
+    try std.testing.expectEqualStrings("--strict-mcp-config", argv[3]);
+    try std.testing.expectEqualStrings("--teleport", argv[5]);
+    try std.testing.expectEqualStrings("session_1", argv[6]);
+    try std.testing.expectEqualStrings(TELEPORT_ALLOWED_TOOLS, argv[8]);
+    try std.testing.expectEqualStrings("do it", argv[11]);
     for (argv) |a| {
         try std.testing.expect(std.mem.indexOf(u8, a, "dangerously") == null);
         try std.testing.expect(std.mem.indexOf(u8, a, "bypass") == null);
@@ -396,4 +402,82 @@ test "handOff times out a claude that never exits" {
     defer gpa.free(out_dir);
     const r = handOffWithTimeout(gpa, std.testing.io, hang, s, root, out_dir, 1);
     try std.testing.expectEqualStrings("timed out", r.failed);
+}
+
+/// A stand-in claude for continueFrom: `--cloud <title>` prints a created id;
+/// `-p` exits with `send_exit`.
+fn fakeContinueClaude(dir: std.Io.Dir, send_exit: u8) !void {
+    const script = try std.fmt.allocPrint(std.testing.allocator,
+        \\#!/bin/sh
+        \\for a in "$@"; do [ "$a" = "-p" ] && exit {d}; done
+        \\echo "Created cloud session: t"; echo "claude.ai/code/session_01ABCDEFGHJKLMNOP"
+        \\
+    , .{send_exit});
+    defer std.testing.allocator.free(script);
+    try dir.writeFile(std.testing.io, .{ .sub_path = "claude.sh", .data = script, .flags = .{ .permissions = .fromMode(0o755) } });
+}
+
+fn continueFixture(gpa: std.mem.Allocator, tmp: *std.testing.TmpDir, with_handoff: bool) !struct { root: []u8, h: Handoff } {
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &buf);
+    const root = try gpa.dupe(u8, buf[0..len]);
+    const work = try std.fs.path.join(gpa, &.{ root, "work" });
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, work);
+    const saved = try std.fs.path.join(gpa, &.{ root, "handoff.md" });
+    if (with_handoff) try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = saved, .data = "# handoff" });
+    return .{ .root = root, .h = .{ .work_dir = work, .saved_path = saved } };
+}
+
+test "continueFrom creates the session, sends the handoff, and removes the work dir" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try fakeContinueClaude(tmp.dir, 0);
+    const fx = try continueFixture(gpa, &tmp, true);
+    defer gpa.free(fx.root);
+    defer fx.h.deinit(gpa);
+    const claude = try std.fs.path.join(gpa, &.{ fx.root, "claude.sh" });
+    defer gpa.free(claude);
+    const r = continueFrom(gpa, std.testing.io, claude, "Task", fx.h);
+    defer if (r == .ok) gpa.free(r.ok);
+    try std.testing.expectEqualStrings("session_01ABCDEFGHJKLMNOP", r.ok);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, fx.h.work_dir, .{}));
+}
+
+test "continueFrom reports a failed send" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try fakeContinueClaude(tmp.dir, 1);
+    const fx = try continueFixture(gpa, &tmp, true);
+    defer gpa.free(fx.root);
+    defer fx.h.deinit(gpa);
+    const claude = try std.fs.path.join(gpa, &.{ fx.root, "claude.sh" });
+    defer gpa.free(claude);
+    const r = continueFrom(gpa, std.testing.io, claude, "Task", fx.h);
+    try std.testing.expectEqualStrings("handoff could not be sent", r.failed);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, fx.h.work_dir, .{}));
+}
+
+test "continueFrom reports a create that prints no session id" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const fx = try continueFixture(gpa, &tmp, true);
+    defer gpa.free(fx.root);
+    defer fx.h.deinit(gpa);
+    const r = continueFrom(gpa, std.testing.io, "/usr/bin/true", "Task", fx.h);
+    try std.testing.expectEqualStrings("cloud session was not created", r.failed);
+}
+
+test "continueFrom reports a missing handoff file" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const fx = try continueFixture(gpa, &tmp, false);
+    defer gpa.free(fx.root);
+    defer fx.h.deinit(gpa);
+    const r = continueFrom(gpa, std.testing.io, "/usr/bin/true", "Task", fx.h);
+    try std.testing.expectEqualStrings("handoff file is missing", r.failed);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, fx.h.work_dir, .{}));
 }
