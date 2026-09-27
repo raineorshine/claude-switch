@@ -152,6 +152,7 @@ these local links do not copy those uploads to another account.
 ```
 csw save <name>    Save current sessions (Code + Desktop) as a named profile
 csw use <name>     Switch to a saved profile
+csw use <name> --carry-sessions  Switch and move every open local Code session with you
 csw new <name>     Create a new empty profile slot (then: claude auth login)
 csw share <source> <target>  Share local skills and user plugins on each switch
 csw unshare <target>        Stop sharing and remove shared skill links
@@ -161,7 +162,34 @@ csw whoami         Show active session info (Code + Desktop + saved profiles)
 csw pick           Interactive fuzzy picker (sk / fzf)
 csw update         Update csw to the latest release
 csw logout-all     Log out of all accounts and remove active symlinks
+csw usage          Show 5-hour and weekly usage for every profile
+csw next           Show which profile a switch would move to, and why
+csw handoff        Move the day's work to the next account (see below)
+csw schedule       install | uninstall | status — run csw handoff nightly at 22:00
 ```
+
+## Nightly account handoff
+
+If you run more than one Claude subscription, `csw handoff` moves your work to the next account when the active one is nearly out of weekly usage, so you never watch the percentage or write handoffs by hand.
+
+```bash
+csw handoff --dry-run   # show what would happen; changes nothing
+csw schedule install    # run it every night at 22:00
+```
+
+When the active profile is at 90% or more of its weekly limit, `csw handoff`:
+
+1. Picks the next profile: below 90%, with a valid saved login, whose week resets soonest.
+2. Hands off every cloud Code session that is running or was started in the last 24 hours. Each one is downloaded into a throwaway clone with `claude --teleport`, where `/ce-handoff create` (Compound Engineering plugin) writes its handoff. The live session is never messaged or interrupted.
+3. Switches accounts. Every open local Code session is carried into the next profile with its full history and archived in the old one, so it stays listed in Claude Desktop, and on your phone through Remote Control, on the new account.
+4. Starts one new cloud session per handoff on the new account, so those tasks continue there and are listed in Desktop, on your phone, and on claude.ai.
+5. Writes a report and sends one notification, which reminds you to sign the Claude mobile app in to the new account.
+
+What stays behind: chats (Desktop Chat tab and mobile), and cloud sessions older than a day that are not running. They remain on the old account and come back when you switch to it again.
+
+The scheduled run only acts between 22:00 and 06:00. If the Mac is asleep at 22:00, launchd runs it on wake; outside that window it switches nothing and notifies you instead.
+
+Reading another profile's usage needs its saved login. csw refreshes expired logins and saves the renewed one in place; if a login can no longer be renewed, `csw usage` says the profile needs signing in again (`csw use <name>`, then `claude auth login`, then `csw save <name>`).
 
 ## How it works
 
@@ -177,8 +205,11 @@ csw saves Claude Code session credentials in **macOS Keychain** and moves Claude
 | Desktop encryption key | Keychain: `Claude Safe Storage` (managed by Claude Desktop) |
 | Profile configs | `~/.claude.<profile>.json` + `~/.claude.<profile>/` |
 | Active profile | `~/.claude.json` → symlink, `~/.claude/` → symlink |
+| Handoff reports and cloud handoffs | `~/Library/Application Support/csw/handoffs/<date>/` |
+| Nightly schedule | `~/Library/LaunchAgents/com.github.raineorshine.csw-handoff.plist`, log in `~/Library/Application Support/csw/handoff.log` |
 
 - Account switching does not send tokens to a csw service.
+- `csw usage`, `csw next` and `csw handoff` call Anthropic's API directly (usage, login refresh, cloud-session list) with each profile's own saved login. Requests go through `curl` with the request on stdin, so tokens never appear in process arguments.
 - Both Claude Code and Claude Desktop are optional — csw works with either or both.
 - On switch, Claude Desktop is quit automatically and relaunched.
 
