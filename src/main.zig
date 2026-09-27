@@ -7,6 +7,7 @@ const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
 const profile = @import("profile.zig");
 const usage = @import("usage.zig");
+const handoff = @import("handoff.zig");
 
 // Re-exporta os módulos para que `zig build test` colete todos os test blocks.
 comptime {
@@ -24,6 +25,7 @@ comptime {
     _ = @import("usage.zig");
     _ = @import("sessions.zig");
     _ = @import("cloud.zig");
+    _ = @import("handoff.zig");
 }
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
@@ -240,6 +242,21 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         return usage.cmdUsage(gpa, io);
     } else if (std.mem.eql(u8, cmd, "next")) {
         return usage.cmdNext(gpa, io);
+    } else if (std.mem.eql(u8, cmd, "handoff")) {
+        var opts: handoff.Options = .{};
+        for (args[1..]) |a| {
+            if (std.mem.eql(u8, a, "--dry-run")) {
+                opts.dry_run = true;
+            } else if (std.mem.eql(u8, a, "--force")) {
+                opts.force = true;
+            } else if (std.mem.eql(u8, a, "--scheduled")) {
+                opts.scheduled = true;
+            } else {
+                display.print("❌  Unknown option for handoff: {s}\n", .{a});
+                return error.UnknownOption;
+            }
+        }
+        return handoff.cmdHandoff(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
         return profile.cmdLogoutAll(gpa, io);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
@@ -271,6 +288,8 @@ fn printHelp() void {
         \\  whoami           Show active session info
         \\  usage            Show 5-hour and weekly usage for every profile
         \\  next             Show which profile a switch would move to, and why
+        \\  handoff [--dry-run] [--force]  At 90%+ weekly usage: hand off cloud sessions, carry
+        \\                   local sessions, switch to the next profile, and notify
         \\  pick             Interactive profile picker (sk / fzf)
         \\  update [--verbose]  Update csw to the latest release
         \\  logout-all       Log out and remove all active symlinks
