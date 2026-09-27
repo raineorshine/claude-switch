@@ -23,6 +23,7 @@ comptime {
     _ = @import("oauth.zig");
     _ = @import("usage.zig");
     _ = @import("sessions.zig");
+    _ = @import("cloud.zig");
 }
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
