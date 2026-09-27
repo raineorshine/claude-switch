@@ -156,7 +156,23 @@ pub fn freeRows(gpa: std.mem.Allocator, rows: []ProfileUsage) void {
     gpa.free(rows);
 }
 
-pub const Exclusion = struct { name: []const u8, reason: []const u8 };
+pub const ExclusionKind = enum { needs_sign_in, no_login, unreadable, weekly_unknown, full, resets_later };
+
+pub const Exclusion = struct {
+    name: []const u8,
+    kind: ExclusionKind,
+
+    pub fn reason(e: Exclusion) []const u8 {
+        return switch (e.kind) {
+            .needs_sign_in => "needs signing in again",
+            .no_login => "no saved login",
+            .unreadable => "usage could not be read",
+            .weekly_unknown => "weekly usage unknown",
+            .full => "weekly usage at or above 90%",
+            .resets_later => "a profile resets sooner",
+        };
+    }
+};
 
 pub const Choice = struct {
     /// Index into the rows, or null when no profile qualifies.
@@ -176,14 +192,14 @@ pub fn chooseNext(gpa: std.mem.Allocator, rows: []const ProfileUsage) !Choice {
     errdefer choice.deinit(gpa);
     for (rows, 0..) |row, i| {
         if (row.active) continue;
-        const reason: ?[]const u8 = switch (row.state) {
-            .needs_sign_in => "needs signing in again",
-            .no_login => "no saved login",
-            .failed => "usage could not be read",
-            .usage => |u| if (u.seven_day) |w| (if (w.pct >= THRESHOLD_PCT) "weekly usage at or above 90%" else null) else "weekly usage unknown",
+        const excluded: ?ExclusionKind = switch (row.state) {
+            .needs_sign_in => .needs_sign_in,
+            .no_login => .no_login,
+            .failed => .unreadable,
+            .usage => |u| if (u.seven_day) |w| (if (w.pct >= THRESHOLD_PCT) ExclusionKind.full else null) else .weekly_unknown,
         };
-        if (reason) |r| {
-            try choice.excluded.append(gpa, .{ .name = row.name, .reason = r });
+        if (excluded) |kind| {
+            try choice.excluded.append(gpa, .{ .name = row.name, .kind = kind });
             continue;
         }
         if (choice.next) |best| {
@@ -192,10 +208,10 @@ pub fn chooseNext(gpa: std.mem.Allocator, rows: []const ProfileUsage) !Choice {
             const better = a.resets_at < b.resets_at or
                 (a.resets_at == b.resets_at and (a.pct < b.pct or (a.pct == b.pct and std.mem.lessThan(u8, rows[i].name, rows[best].name))));
             if (better) {
-                try choice.excluded.append(gpa, .{ .name = rows[best].name, .reason = "a profile resets sooner" });
+                try choice.excluded.append(gpa, .{ .name = rows[best].name, .kind = .resets_later });
                 choice.next = i;
             } else {
-                try choice.excluded.append(gpa, .{ .name = row.name, .reason = "a profile resets sooner" });
+                try choice.excluded.append(gpa, .{ .name = row.name, .kind = .resets_later });
             }
         } else choice.next = i;
     }
@@ -262,7 +278,7 @@ pub fn cmdNext(gpa: std.mem.Allocator, io: std.Io) !void {
     } else {
         display.print("No profile has capacity.\n", .{});
     }
-    for (choice.excluded.items) |e| display.print("  {s}: {s}\n", .{ e.name, e.reason });
+    for (choice.excluded.items) |e| display.print("  {s}: {s}\n", .{ e.name, e.reason() });
 }
 
 test "parseIso8601 handles offsets and fractions" {
@@ -314,7 +330,7 @@ test "chooseNext excludes full profiles and ones needing sign-in" {
     defer c.deinit(gpa);
     try std.testing.expectEqualStrings("ok", rows[c.next.?].name);
     try std.testing.expectEqual(@as(usize, 2), c.excluded.items.len);
-    try std.testing.expectEqualStrings("needs signing in again", c.excluded.items[1].reason);
+    try std.testing.expectEqual(ExclusionKind.needs_sign_in, c.excluded.items[1].kind);
 }
 
 test "chooseNext returns none when every other profile is full (AE5)" {

@@ -28,6 +28,7 @@ comptime {
     _ = @import("cloud.zig");
     _ = @import("handoff.zig");
     _ = @import("schedule.zig");
+    _ = @import("json.zig");
 }
 
 const KEYCHAIN_CODE = "Claude Code-credentials";

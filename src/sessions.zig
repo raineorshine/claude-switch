@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const exec = @import("exec.zig");
+const json = @import("json.zig");
 
 /// One side of a carry-over: a profile's Desktop data and Code config.
 pub const Side = struct {
@@ -74,17 +75,6 @@ fn copyTree(gpa: std.mem.Allocator, io: std.Io, src: []const u8, dst: []const u8
     if (!r.ok()) return error.CopyFailed;
 }
 
-fn removeTree(gpa: std.mem.Allocator, io: std.Io, path: []const u8) void {
-    const r = exec.run(gpa, io, .{ .argv = &.{ "/bin/rm", "-rf", path } }) catch return;
-    r.deinit(gpa);
-}
-
-fn stringField(v: std.json.Value, key: []const u8) ?[]const u8 {
-    if (v != .object) return null;
-    const f = v.object.get(key) orelse return null;
-    return if (f == .string) f.string else null;
-}
-
 /// Carries every unarchived session record from `src` into `dst`. Sessions whose
 /// CLI id appears in `busy_ids` (a process still running it) are left in place
 /// and reported as failed.
@@ -132,9 +122,9 @@ pub fn carryIn(gpa: std.mem.Allocator, io: std.Io, src: Side, dst: Side, busy_id
             if (a == .bool and a.bool) continue;
         }
 
-        const title = stringField(record, "title") orelse name;
-        const cli_id = stringField(record, "cliSessionId");
-        const cwd = stringField(record, "cwd");
+        const title = json.stringField(record, "title") orelse name;
+        const cli_id = json.stringField(record, "cliSessionId");
+        const cwd = json.stringField(record, "cwd");
         if (cli_id == null or cwd == null) {
             try result.failed.append(gpa, .{ .title = try gpa.dupe(u8, title), .reason = "record has no history reference" });
             continue;
@@ -176,7 +166,7 @@ pub fn carryIn(gpa: std.mem.Allocator, io: std.Io, src: Side, dst: Side, busy_id
         const dst_extra = try std.fs.path.join(gpa, &.{ dst_project, cli_id.? });
         defer gpa.free(dst_extra);
         if (exists(io, src_extra)) {
-            removeTree(gpa, io, dst_extra);
+            exec.removeTree(gpa, io, dst_extra);
             copyTree(gpa, io, src_extra, dst_extra) catch {
                 try result.failed.append(gpa, .{ .title = try gpa.dupe(u8, title), .reason = "history could not be copied" });
                 continue;

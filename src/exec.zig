@@ -87,6 +87,12 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !Result {
     return .{ .code = code, .timed_out = timed_out, .stdout = out, .stderr = err_out };
 }
 
+/// Deletes `path` recursively; failures are ignored (best-effort cleanup).
+pub fn removeTree(gpa: std.mem.Allocator, io: std.Io, path: []const u8) void {
+    const r = run(gpa, io, .{ .argv = &.{ "/bin/rm", "-rf", path } }) catch return;
+    r.deinit(gpa);
+}
+
 test "run passes input on stdin, not argv" {
     const gpa = std.testing.allocator;
     const r = try run(gpa, std.testing.io, .{ .argv = &.{"/bin/cat"}, .input = "secret-token" });
