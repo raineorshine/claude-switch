@@ -22,6 +22,7 @@ comptime {
     _ = @import("http.zig");
     _ = @import("oauth.zig");
     _ = @import("usage.zig");
+    _ = @import("sessions.zig");
 }
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
@@ -198,7 +199,15 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     if (std.mem.eql(u8, cmd, "save")) {
         return profile.cmdSave(gpa, io, try needsName(args, "save"));
     } else if (std.mem.eql(u8, cmd, "use")) {
-        return profile.cmdUse(gpa, io, try needsName(args, "use"));
+        const name = try needsName(args, "use");
+        const carry = args.len >= 3 and std.mem.eql(u8, args[2], "--carry-sessions");
+        var result = try profile.useWith(gpa, io, name, .{ .carry_sessions = carry });
+        defer result.deinit(gpa);
+        if (result.carry) |c| {
+            display.print("Carried {d} open session(s) into '{s}'\n", .{ c.carried, name });
+            for (c.failed.items) |f| display.print("  not carried: {s} ({s})\n", .{ f.title, f.reason });
+        } else if (result.carry_skipped) |why| display.print("⚠️  Sessions not carried: {s}\n", .{why});
+        return;
     } else if (std.mem.eql(u8, cmd, "switch")) {
         display.info("'switch' is deprecated, use 'use' instead");
         return profile.cmdUse(gpa, io, try needsName(args, "switch"));
@@ -252,7 +261,7 @@ fn printHelp() void {
         \\
         \\COMMANDS:
         \\  save <name>      Save current sessions as a named profile
-        \\  use <name>       Switch to a saved profile
+        \\  use <name> [--carry-sessions]  Switch to a saved profile; optionally move open local Code sessions with you
         \\  new <name>       Create a new empty profile slot
         \\  share <source> <target>  Share local skills and plugins on each switch
         \\  unshare <target>        Stop sharing and remove shared skill links

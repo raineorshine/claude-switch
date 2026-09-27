@@ -7,6 +7,7 @@ const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
 const skills = @import("skills.zig");
 const plugins = @import("plugins.zig");
+const sessions = @import("sessions.zig");
 
 const c = @cImport({
     @cInclude("dirent.h");
@@ -66,6 +67,54 @@ pub fn cmdSave(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
 }
 
 pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
+    var result = try useWith(gpa, io, name, .{});
+    result.deinit(gpa);
+}
+
+pub const UseOptions = struct {
+    /// Copy every open local Code session into the target profile (KTD7).
+    carry_sessions: bool = false,
+};
+
+pub const UseResult = struct {
+    carry: ?sessions.Result = null,
+    /// Why carry-over did not run, when it was requested.
+    carry_skipped: ?[]const u8 = null,
+
+    pub fn deinit(r: *UseResult, gpa: std.mem.Allocator) void {
+        if (r.carry) |*carried| carried.deinit(gpa);
+    }
+};
+
+/// Carries open local sessions from the active profile `from` into `to`.
+/// Runs after Desktop has quit and before the profile directories swap.
+fn carrySessions(gpa: std.mem.Allocator, io: std.Io, h: []const u8, from: []const u8, to: []const u8) !sessions.Result {
+    const src_desktop = try paths.desktopDirIn(gpa, h);
+    defer gpa.free(src_desktop);
+    const dst_desktop = try paths.desktopProfileDirIn(gpa, h, to);
+    defer gpa.free(dst_desktop);
+    const src_code = try paths.profileDirIn(gpa, h, from);
+    defer gpa.free(src_code);
+    const dst_code = try paths.profileDirIn(gpa, h, to);
+    defer gpa.free(dst_code);
+    const src_json = try paths.profileJsonIn(gpa, h, from);
+    defer gpa.free(src_json);
+    const dst_json = try paths.profileJsonIn(gpa, h, to);
+    defer gpa.free(dst_json);
+    const src_rel = try sessions.accountRel(gpa, io, src_json);
+    defer gpa.free(src_rel);
+    const dst_rel = try sessions.accountRel(gpa, io, dst_json);
+    defer gpa.free(dst_rel);
+
+    var busy = try sessions.settleSessionProcesses(gpa, io, src_desktop, 30);
+    defer sessions.freeIds(gpa, &busy);
+    const busy_const: []const []const u8 = @ptrCast(busy.items);
+    return sessions.carryIn(gpa, io, .{ .desktop_dir = src_desktop, .account_rel = src_rel, .code_dir = src_code }, .{ .desktop_dir = dst_desktop, .account_rel = dst_rel, .code_dir = dst_code }, busy_const);
+}
+
+pub fn useWith(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: UseOptions) !UseResult {
+    var use_result: UseResult = .{};
+    errdefer use_result.deinit(gpa);
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
@@ -117,6 +166,18 @@ pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
     desktop.quit(gpa, io);
     const has_desktop = desktop.hasData(gpa, name);
 
+    if (opts.carry_sessions) {
+        if (cur) |c_name| {
+            if (std.mem.eql(u8, c_name, name)) {
+                use_result.carry_skipped = "already on this profile";
+            } else if (carrySessions(gpa, io, h, c_name, name)) |carried| {
+                use_result.carry = carried;
+            } else |err| {
+                use_result.carry_skipped = @errorName(err);
+            }
+        } else use_result.carry_skipped = "no active profile";
+    }
+
     if (c_token) |token| {
         const msg = try std.fmt.allocPrint(gpa, "Switching Claude Code → {s}", .{name});
         defer gpa.free(msg);
@@ -131,6 +192,7 @@ pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
     const msg = try std.fmt.allocPrint(gpa, "Switched to '{s}'", .{name});
     defer gpa.free(msg);
     display.ok(msg);
+    return use_result;
 }
 
 pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
