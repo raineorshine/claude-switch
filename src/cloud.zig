@@ -5,6 +5,7 @@
 //! (`claude -p --teleport`) where `/ce-handoff create` writes HANDOFF.md. After
 //! the switch a new cloud session is created from that clone and sent the
 //! handoff, so the task continues on the next account.
+//! Observed Claude behavior this relies on: docs/claude-internals.md
 
 const std = @import("std");
 const exec = @import("exec.zig");
