@@ -87,10 +87,14 @@ This saves the session tokens into macOS Keychain and migrates `~/.claude.json` 
 
 **2. Create a slot for the second account and log in**
 
+Sign out of claude.ai in your browser first, or open the sign-in URL that `claude auth login` prints in a private window. `claude auth login` authorizes whichever account the browser is already signed in to, even with `--email`, so a browser still signed in to the first account saves that account a second time under the new name.
+
 ```bash
 csw new personal   # creates ~/.claude.personal.json + ~/.claude.personal/, activates symlinks
-claude auth login  # logs in as the personal account into the active slot
+claude auth login --email you@personal.com  # logs in as the personal account into the active slot
 ```
+
+Check the result before saving: `claude auth status` must show the new account's email.
 
 **3. Save the second account**
 
@@ -189,7 +193,7 @@ What stays behind: chats (Desktop Chat tab and mobile), and cloud sessions older
 
 The scheduled run only acts between 22:00 and 06:00. If the Mac is asleep at 22:00, launchd runs it on wake; outside that window it switches nothing and notifies you instead.
 
-Reading another profile's usage needs its saved login. csw refreshes expired logins and saves the renewed one in place; if a login can no longer be renewed, `csw usage` says the profile needs signing in again (`csw use <name>`, then `claude auth login`, then `csw save <name>`).
+Reading another profile's usage needs its saved login. csw refreshes expired logins and saves the renewed one in place; if a login can no longer be renewed, `csw usage` says the profile needs signing in again. Sign out of claude.ai in your browser, then run `csw use <name>`, `claude auth login --email <address>` and `csw save <name>`, in that order: logging in while another profile is active overwrites that profile's login.
 
 ## How it works
 

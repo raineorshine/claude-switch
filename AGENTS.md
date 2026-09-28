@@ -11,7 +11,9 @@ A Zig 0.16 CLI for macOS that swaps Claude Desktop and Claude Code between saved
 ## Working rules
 
 - Never run a real switch, carry-over or cloud continuation against the user's profiles to test something. Build the case in temp directories; the first real run is the user's.
-- Reading saved logins or calling Anthropic's API with them, writing Desktop's session records, and teleporting cloud sessions are blocked by auto mode until the user approves. Ask before relying on them.
+- Reading saved logins (even hashed, to compare them) or calling Anthropic's API with them, rewriting `~/.claude.<profile>.json`, writing Desktop's session records, and teleporting cloud sessions are blocked by auto mode until the user approves. Ask before relying on them, or hand the user a script to run.
+- Before switching or handing off, check that each profile holds its own account (`csw whoami`, `csw usage`). A `claude auth login` run under the wrong profile gets saved over that profile's login by the next switch; repair it first (`docs/claude-internals.md`, Logins).
+- The installed `~/.local/bin/csw` is the upstream release and lacks `usage`, `next`, `handoff` and `schedule`. Use this checkout's `zig-out/bin/csw`.
 - One tool refreshes a given saved login. A second one (for example `claude-swap`) rotates the refresh token out from under csw and forces a fresh sign-in.
 - Secrets never go in process arguments: requests go through `exec.run` with the request on stdin (`src/http.zig`). `std.process.run` always ignores stdin in Zig 0.16, so piping needs `std.process.spawn` with `.stdin = .pipe` (`src/exec.zig`).
 
