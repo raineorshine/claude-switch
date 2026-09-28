@@ -241,21 +241,21 @@ fn formatReset(buf: []u8, epoch: i64) []const u8 {
 
 pub fn printRows(rows: []const ProfileUsage) void {
     for (rows) |row| {
-        const marker: []const u8 = if (row.active) "◀ active" else "";
+        const marker: []const u8 = if (row.active) "> " else "  ";
         switch (row.state) {
             .usage => |u| {
                 var b1: [64]u8 = undefined;
                 var b2: [64]u8 = undefined;
                 const five = u.five_hour orelse Window{ .pct = -1, .resets_at = 0 };
                 const week = u.seven_day orelse Window{ .pct = -1, .resets_at = 0 };
-                display.print("  {s:<12} 5h {d:>5.1}%  (resets {s})   7d {d:>5.1}%  (resets {s})  {s}\n", .{
-                    row.name,                  five.pct, formatReset(&b1, five.resets_at),
-                    week.pct,                  formatReset(&b2, week.resets_at), marker,
+                display.print("{s}{s:<12} 5h {d:>5.1}%  (resets {s})   7d {d:>5.1}%  (resets {s})\n", .{
+                    marker,   row.name,                         five.pct, formatReset(&b1, five.resets_at),
+                    week.pct, formatReset(&b2, week.resets_at),
                 });
             },
-            .needs_sign_in => display.print("  {s:<12} needs signing in again (saved login is no longer valid)  {s}\n", .{ row.name, marker }),
-            .no_login => display.print("  {s:<12} no saved Claude Code login  {s}\n", .{ row.name, marker }),
-            .failed => display.print("  {s:<12} usage could not be read  {s}\n", .{ row.name, marker }),
+            .needs_sign_in => display.print("{s}{s:<12} needs signing in again (saved login is no longer valid)\n", .{ marker, row.name }),
+            .no_login => display.print("{s}{s:<12} no saved Claude Code login\n", .{ marker, row.name }),
+            .failed => display.print("{s}{s:<12} usage could not be read\n", .{ marker, row.name }),
         }
     }
 }
