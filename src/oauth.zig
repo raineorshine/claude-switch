@@ -2,6 +2,7 @@
 //!
 //! Saved logins expire. A refresh rotates the refresh token, so the new login
 //! is written back to the same Keychain entry before anything else uses it.
+//! Observed Claude behavior this relies on: docs/claude-internals.md
 
 const std = @import("std");
 const http = @import("http.zig");

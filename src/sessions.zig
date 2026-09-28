@@ -6,6 +6,7 @@
 //! `<code dir>/projects/<slug>/<cliSessionId>.jsonl` plus a same-named directory.
 //! Carrying a session copies both into the target profile and archives the
 //! original, so the same task is not continued in two places.
+//! Observed Claude behavior this relies on: docs/claude-internals.md
 
 const std = @import("std");
 const exec = @import("exec.zig");
